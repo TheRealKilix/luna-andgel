@@ -260,15 +260,6 @@ async function performVibration(pattern) {
     .map(Number).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.min(800, value));
   if (!validPattern.length) throw new Error('Motif de vibration invalide.');
 
-  const deviceHaptics = plugin('DeviceHaptics');
-  if (deviceHaptics?.vibrate) {
-    try {
-      await deviceHaptics.vibrate({ pattern: validPattern });
-      return;
-    } catch (error) {
-      console.warn('Vibration Android native impossible, essai du moteur haptique standard', error);
-    }
-  }
   const haptics = plugin('Haptics');
   if (haptics?.vibrate) {
     try {
@@ -279,7 +270,16 @@ async function performVibration(pattern) {
       }
       return;
     } catch (error) {
-      console.warn('Vibration Capacitor impossible', error);
+      console.warn('Vibration Capacitor impossible, essai du moteur Android', error);
+    }
+  }
+  const deviceHaptics = plugin('DeviceHaptics');
+  if (deviceHaptics?.vibrate) {
+    try {
+      await deviceHaptics.vibrate({ pattern: validPattern });
+      return;
+    } catch (error) {
+      console.warn('Vibration Android native impossible', error);
     }
   }
   if (window.Capacitor?.getPlatform?.() !== 'android' &&
@@ -388,6 +388,25 @@ draw = function () {
     actions.append(react);
     bubble.append(actions);
   }
+
+  const rows = [...$('#list').querySelectorAll('.b')];
+  rows.forEach((bubble, rowIndex) => {
+    const message = hist[rowIndex];
+    const time = bubble.querySelector(':scope > small');
+    if (!message || !time) return;
+    const row = document.createElement('div');
+    row.className = `messageRow ${message.f === me ? 'mine' : 'theirs'}`;
+    bubble.before(row);
+    row.append(bubble);
+    const metadata = document.createElement('div');
+    metadata.className = 'messageMeta';
+    metadata.append(time);
+    const reaction = bubble.querySelector(':scope > .reactions');
+    if (reaction) metadata.append(reaction);
+    row.append(metadata);
+  });
+  const list = $('#list');
+  list.scrollTop = list.scrollHeight;
 };
 
 let swipeStart = null;
@@ -1149,6 +1168,7 @@ $('#featureContent').addEventListener('change', prefChangeHandler, true);
 let pendingVoiceBlob = null;
 let voiceObjectUrl = null;
 let voiceDurationTimer = null;
+let activeVoiceRecorder = null;
 
 function audioTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -1236,7 +1256,19 @@ draw = function (...args) {
 };
 
 $('#mic').onclick = async () => {
-  if (rec) { rec.stop(); return; }
+  if (activeVoiceRecorder) {
+    try {
+      if (activeVoiceRecorder.state === 'recording') {
+        activeVoiceRecorder.requestData();
+        activeVoiceRecorder.stop();
+        $('#mic').textContent = 'Préparation…';
+      }
+    } catch (error) {
+      console.error('Arrêt de l’enregistrement vocal impossible', error);
+      toast('Impossible de terminer le vocal. Réessaie.');
+    }
+    return;
+  }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
     toast('Enregistrement vocal non pris en charge par cette version Android.');
     return;
@@ -1259,20 +1291,26 @@ $('#mic').onclick = async () => {
     let recorder;
     try { recorder = new MediaRecorder(stream, options); }
     catch { recorder = new MediaRecorder(stream); }
-    rec = recorder;
+    activeVoiceRecorder = recorder;
     recorder.ondataavailable = event => { if (event.data?.size) chunks.push(event.data); };
     recorder.onerror = event => {
       console.error('Erreur enregistrement vocal', event.error || event);
-      if (rec === recorder && recorder.state !== 'inactive') recorder.stop();
+      if (activeVoiceRecorder === recorder && recorder.state !== 'inactive') recorder.stop();
     };
     recorder.onstop = () => {
       clearInterval(voiceDurationTimer);
       stream.getTracks().forEach(track => track.stop());
-      if (rec === recorder) rec = null;
+      if (activeVoiceRecorder === recorder) activeVoiceRecorder = null;
       $('#mic').classList.remove('on');
       $('#mic').textContent = '';
-      if (!chunks.length) { toast('Aucun son enregistré.'); return; }
+      $('#mic').disabled = false;
+      if (!chunks.length) { toast('Aucun son récupéré. Réessaie en parlant un peu plus longtemps.'); return; }
       pendingVoiceBlob = new Blob(chunks, { type: recorder.mimeType || chunks[0].type || 'audio/webm' });
+      if (!pendingVoiceBlob.size) {
+        pendingVoiceBlob = null;
+        toast('Le vocal est vide. Vérifie l’autorisation du micro et réessaie.');
+        return;
+      }
       if (pendingVoiceBlob.size > 2.8 * 1024 * 1024) {
         pendingVoiceBlob = null; toast('Vocal trop lourd (limite 2,8 Mo).'); return;
       }
@@ -1283,16 +1321,22 @@ $('#mic').onclick = async () => {
       mountVoicePlayer(previewAudio);
       $('#voicePreview').hidden = false;
       $('#mic').setAttribute('aria-label', 'Enregistrer un autre vocal');
+      $('#mic').disabled = false;
       toast('Vocal prêt : écoute-le, puis touche Envoyer.');
     };
-    recorder.start(500);
+    recorder.start(250);
     $('#mic').classList.add('on');
+    $('#mic').disabled = false;
     let seconds = 0;
     $('#mic').textContent = '⏹ 00:00';
     voiceDurationTimer = setInterval(() => {
       seconds++;
       $('#mic').textContent = `⏹ 00:${String(seconds).padStart(2, '0')}`;
-      if (seconds >= 30 && rec === recorder) { toast('Vocal limité à 30 secondes.'); recorder.stop(); }
+      if (seconds >= 30 && activeVoiceRecorder === recorder) {
+        toast('Vocal limité à 30 secondes.');
+        recorder.requestData();
+        recorder.stop();
+      }
     }, 1000);
   } catch (error) {
     stream?.getTracks().forEach(track => track.stop());
@@ -1352,7 +1396,26 @@ compactUiStyle.textContent = `
   #appVersionInfo span{display:block;margin-top:4px;color:var(--muted)}
   #appUpdateStatus[data-state="error"]{color:#ffb5c8}
   #appUpdateStatus[data-state="ready"]{color:#c8f2d4}
+  #voicePreview{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:9px 10px;background:#191426;border-top:1px solid #302740}
+  #voicePreview[hidden]{display:none!important}
+  #voicePreview .voicePlayer{flex:1;min-width:0}
+  #voicePreview>button{padding:9px 11px;border-radius:12px;background:#382d4e;white-space:nowrap}
+  #voicePreview>#voiceSend{background:linear-gradient(135deg,#c79aee,#e6a9c9);color:#281a34;font-weight:700}
+  .messageRow{display:flex;flex-direction:column;gap:16px;width:fit-content;max-width:100%;margin-bottom:3px}
+  .messageRow.mine{align-self:flex-end;align-items:flex-end}
+  .messageRow.theirs{align-self:flex-start;align-items:flex-start}
+  .messageRow .b{width:fit-content;max-width:min(76vw,420px);padding:9px 12px 10px}
+  .messageMeta{display:flex;align-items:center;gap:7px;min-height:13px;padding:0 6px}
+  .messageRow.mine .messageMeta{justify-content:flex-end}
+  .messageRow.theirs .messageMeta{justify-content:flex-start}
+  .messageMeta small{display:block;margin:0;color:#e6d8f5b8;font-size:10px;line-height:1.2;white-space:nowrap}
+  .messageMeta .reactions{position:static;transform:none;padding:1px 5px;font-size:12px}
+  .bubbleActions{position:absolute;z-index:5;left:50%;bottom:-16px;transform:translateX(-50%)}
+  .bubbleActions>button{display:grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid #655273;border-radius:50%;background:#191326;color:#f2dfff;font-size:17px;box-shadow:0 3px 10px #08051088}
+  .reactionPicker{position:absolute;z-index:6;left:50%;bottom:calc(100% + 7px);display:flex;gap:3px;padding:5px;border:1px solid #554365;border-radius:18px;background:#211a30;box-shadow:0 6px 20px #080510aa;transform:translateX(-50%)}
+  .reactionPicker button{width:34px;height:34px;padding:0;border-radius:50%;background:#382d4e;font-size:18px}
   .distanceLabel{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 6px 2px 0;text-align:left}
+  #list{gap:4px}
   #list .b{transition:transform 180ms cubic-bezier(.2,.8,.2,1);touch-action:pan-y}
   #list .b.replySwipeActive{z-index:2;transition:none;box-shadow:0 6px 22px #cf9cff55}
   .swipeReplyCue{position:absolute;right:-42px;top:50%;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#463457;color:#f2dfff;font-size:19px;opacity:0;transform:translate(-8px,-50%) scale(.75);transition:opacity 140ms,transform 180ms}
