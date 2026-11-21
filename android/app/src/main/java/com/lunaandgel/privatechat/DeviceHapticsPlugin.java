@@ -19,7 +19,9 @@ public class DeviceHapticsPlugin extends Plugin {
         Vibrator vibrator;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             VibratorManager manager = (VibratorManager) getContext().getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
-            vibrator = manager == null ? null : manager.getDefaultVibrator();
+            vibrator = manager == null
+                ? (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE)
+                : manager.getDefaultVibrator();
         } else {
             vibrator = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
         }

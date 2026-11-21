@@ -260,8 +260,18 @@ async function performVibration(pattern) {
     .map(Number).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.min(800, value));
   if (!validPattern.length) throw new Error('Motif de vibration invalide.');
 
+  const platform = window.Capacitor?.getPlatform?.();
+  if (platform === 'android') {
+    const deviceHaptics = plugin('DeviceHaptics');
+    if (!deviceHaptics?.vibrate) {
+      throw new Error('Le module Android de vibration est absent de cette version.');
+    }
+    await deviceHaptics.vibrate({ pattern: validPattern });
+    return;
+  }
+
   const haptics = plugin('Haptics');
-  if (haptics?.vibrate) {
+  if (platform === 'ios' && haptics?.vibrate) {
     try {
       for (let index = 0; index < validPattern.length; index++) {
         const duration = validPattern[index];
@@ -270,21 +280,11 @@ async function performVibration(pattern) {
       }
       return;
     } catch (error) {
-      console.warn('Vibration Capacitor impossible, essai du moteur Android', error);
+      console.warn('Vibration Capacitor impossible, essai du navigateur', error);
     }
   }
-  const deviceHaptics = plugin('DeviceHaptics');
-  if (deviceHaptics?.vibrate) {
-    try {
-      await deviceHaptics.vibrate({ pattern: validPattern });
-      return;
-    } catch (error) {
-      console.warn('Vibration Android native impossible', error);
-    }
-  }
-  if (window.Capacitor?.getPlatform?.() !== 'android' &&
-      typeof navigator.vibrate === 'function' && navigator.vibrate(validPattern)) return;
-  throw new Error('Vibration indisponible. Vérifie les réglages Android et installe la dernière version de Luna.');
+  if (platform !== 'ios' && typeof navigator.vibrate === 'function' && navigator.vibrate(validPattern)) return;
+  throw new Error('Vibration indisponible. Vérifie les réglages de vibration du téléphone.');
 }
 
 vibe = function (pattern, showNotice = false) {
@@ -1169,6 +1169,8 @@ let pendingVoiceBlob = null;
 let voiceObjectUrl = null;
 let voiceDurationTimer = null;
 let activeVoiceRecorder = null;
+let nativeVoiceRecording = false;
+let nativeVoiceStopPending = false;
 
 function audioTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -1255,7 +1257,60 @@ draw = function (...args) {
   document.querySelectorAll('#list .b audio').forEach(mountVoicePlayer);
 };
 
+function showVoicePreview(blob) {
+  if (!blob?.size) {
+    toast('Le vocal est vide. Vérifie le micro et réessaie.');
+    return false;
+  }
+  if (blob.size > 2.8 * 1024 * 1024) {
+    toast('Vocal trop lourd (limite 2,8 Mo).');
+    return false;
+  }
+  pendingVoiceBlob = blob;
+  if (voiceObjectUrl) URL.revokeObjectURL(voiceObjectUrl);
+  voiceObjectUrl = URL.createObjectURL(blob);
+  const previewAudio = $('#voicePreview audio');
+  previewAudio.src = voiceObjectUrl;
+  mountVoicePlayer(previewAudio);
+  $('#voicePreview').hidden = false;
+  $('#mic').setAttribute('aria-label', 'Enregistrer un autre vocal');
+  toast('Vocal prêt : écoute-le, puis touche Envoyer.');
+  return true;
+}
+
+async function stopNativeVoiceRecording() {
+  if (!nativeVoiceRecording || nativeVoiceStopPending) return;
+  nativeVoiceStopPending = true;
+  clearInterval(voiceDurationTimer);
+  $('#mic').textContent = 'Préparation…';
+  $('#mic').disabled = true;
+  try {
+    const microphone = plugin('Microphone');
+    if (!microphone?.stopRecording) throw new Error('Enregistreur Android indisponible.');
+    const recording = await microphone.stopRecording();
+    if (typeof recording?.dataUrl !== 'string' || !recording.dataUrl.startsWith('data:audio/')) {
+      throw new Error('Android n’a pas retourné le fichier vocal.');
+    }
+    const response = await fetch(recording.dataUrl);
+    if (!response.ok) throw new Error('Impossible de lire le fichier vocal.');
+    showVoicePreview(await response.blob());
+  } catch (error) {
+    console.error('Récupération du vocal Android impossible', error);
+    toast(error.message || 'Impossible de récupérer le vocal.');
+  } finally {
+    nativeVoiceRecording = false;
+    nativeVoiceStopPending = false;
+    $('#mic').classList.remove('on');
+    $('#mic').textContent = '';
+    $('#mic').disabled = false;
+  }
+}
+
 $('#mic').onclick = async () => {
+  if (nativeVoiceRecording) {
+    void stopNativeVoiceRecording();
+    return;
+  }
   if (activeVoiceRecorder) {
     try {
       if (activeVoiceRecorder.state === 'recording') {
@@ -1269,16 +1324,34 @@ $('#mic').onclick = async () => {
     }
     return;
   }
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-    toast('Enregistrement vocal non pris en charge par cette version Android.');
-    return;
-  }
   let stream;
   try {
     const microphone = plugin('Microphone');
     if (microphone?.requestPermission) {
       const permission = await microphone.requestPermission();
       if (!permission.granted) throw new DOMException('Permission microphone refusée.', 'NotAllowedError');
+    }
+    if (window.Capacitor?.getPlatform?.() === 'android' &&
+        microphone?.startRecording && microphone?.stopRecording) {
+      await microphone.startRecording();
+      nativeVoiceRecording = true;
+      $('#mic').classList.add('on');
+      $('#mic').disabled = false;
+      let seconds = 0;
+      $('#mic').textContent = '⏹ 00:00';
+      voiceDurationTimer = setInterval(() => {
+        seconds++;
+        $('#mic').textContent = `⏹ 00:${String(seconds).padStart(2, '0')}`;
+        if (seconds >= 30 && nativeVoiceRecording) {
+          toast('Vocal limité à 30 secondes.');
+          void stopNativeVoiceRecording();
+        }
+      }, 1000);
+      toast('Enregistrement en cours. Touche encore pour terminer.');
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      throw new Error('Enregistrement vocal non pris en charge sur cet appareil.');
     }
     stream = await navigator.mediaDevices.getUserMedia({ audio: {
       echoCancellation: true, noiseSuppression: true, autoGainControl: true
@@ -1305,24 +1378,7 @@ $('#mic').onclick = async () => {
       $('#mic').textContent = '';
       $('#mic').disabled = false;
       if (!chunks.length) { toast('Aucun son récupéré. Réessaie en parlant un peu plus longtemps.'); return; }
-      pendingVoiceBlob = new Blob(chunks, { type: recorder.mimeType || chunks[0].type || 'audio/webm' });
-      if (!pendingVoiceBlob.size) {
-        pendingVoiceBlob = null;
-        toast('Le vocal est vide. Vérifie l’autorisation du micro et réessaie.');
-        return;
-      }
-      if (pendingVoiceBlob.size > 2.8 * 1024 * 1024) {
-        pendingVoiceBlob = null; toast('Vocal trop lourd (limite 2,8 Mo).'); return;
-      }
-      if (voiceObjectUrl) URL.revokeObjectURL(voiceObjectUrl);
-      voiceObjectUrl = URL.createObjectURL(pendingVoiceBlob);
-      const previewAudio = $('#voicePreview audio');
-      previewAudio.src = voiceObjectUrl;
-      mountVoicePlayer(previewAudio);
-      $('#voicePreview').hidden = false;
-      $('#mic').setAttribute('aria-label', 'Enregistrer un autre vocal');
-      $('#mic').disabled = false;
-      toast('Vocal prêt : écoute-le, puis touche Envoyer.');
+      showVoicePreview(new Blob(chunks, { type: recorder.mimeType || chunks[0].type || 'audio/webm' }));
     };
     recorder.start(250);
     $('#mic').classList.add('on');
@@ -1345,7 +1401,7 @@ $('#mic').onclick = async () => {
       ? 'Autorise le microphone dans les réglages Android puis réessaie.'
       : error.name === 'NotFoundError' ? 'Aucun microphone disponible sur cet appareil.'
         : error.name === 'NotReadableError' ? 'Le microphone est déjà utilisé par une autre application.'
-          : 'Impossible d’ouvrir le microphone. Vérifie ses autorisations Android.';
+          : error.message || 'Impossible d’ouvrir le microphone. Vérifie ses autorisations Android.';
     toast(reason);
   }
 };
@@ -1391,7 +1447,7 @@ const compactUiStyle = document.createElement('style');
 compactUiStyle.textContent = `
   .menuitem[hidden]{display:none!important}
   #settings [hidden]{display:none!important}
-  #settings{max-height:calc(100dvh - 96px);overflow-y:auto}
+  #settings{z-index:100!important;max-height:calc(100dvh - 96px);overflow-y:auto}
   #appVersionInfo{margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#211a30;font-size:12px}
   #appVersionInfo span{display:block;margin-top:4px;color:var(--muted)}
   #appUpdateStatus[data-state="error"]{color:#ffb5c8}
@@ -1411,8 +1467,12 @@ compactUiStyle.textContent = `
   .messageMeta small{display:block;margin:0;color:#e6d8f5b8;font-size:10px;line-height:1.2;white-space:nowrap}
   .messageMeta .reactions{position:static;transform:none;padding:1px 5px;font-size:12px}
   .bubbleActions{position:absolute;z-index:5;left:50%;bottom:-16px;transform:translateX(-50%)}
+  .messageRow.theirs .bubbleActions{left:12px;transform:none}
+  .messageRow.mine .bubbleActions{left:auto;right:12px;transform:none}
   .bubbleActions>button{display:grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid #655273;border-radius:50%;background:#191326;color:#f2dfff;font-size:17px;box-shadow:0 3px 10px #08051088}
-  .reactionPicker{position:absolute;z-index:6;left:50%;bottom:calc(100% + 7px);display:flex;gap:3px;padding:5px;border:1px solid #554365;border-radius:18px;background:#211a30;box-shadow:0 6px 20px #080510aa;transform:translateX(-50%)}
+  .reactionPicker{position:absolute;z-index:6;left:50%;bottom:calc(100% + 7px);display:flex;flex-wrap:wrap;gap:3px;max-width:min(280px,calc(100vw - 32px));padding:5px;border:1px solid #554365;border-radius:18px;background:#211a30;box-shadow:0 6px 20px #080510aa;transform:translateX(-50%)}
+  .messageRow.theirs .reactionPicker{left:0;transform:none}
+  .messageRow.mine .reactionPicker{left:auto;right:0;transform:none}
   .reactionPicker button{width:34px;height:34px;padding:0;border-radius:50%;background:#382d4e;font-size:18px}
   .distanceLabel{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 6px 2px 0;text-align:left}
   #list{gap:4px}
