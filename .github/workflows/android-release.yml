@@ -55,6 +55,7 @@ jobs:
             VERSION_CODE=$((GITHUB_RUN_NUMBER + 1000))
             LUNA_VERSION_CODE="$VERSION_CODE" npm run android:sync
             cd android
+            chmod +x ./gradlew
             ./gradlew assembleRelease "-PVERSION_CODE=$VERSION_CODE" "-PVERSION_NAME=$VERSION_NAME"
             cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/Luna-Andgel.apk"
       - name: Prepare release metadata
