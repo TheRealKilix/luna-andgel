@@ -255,41 +255,56 @@ recv = async function (message) {
   }
 };
 
+async function performVibration(pattern) {
+  const validPattern = (Array.isArray(pattern) ? pattern : [pattern])
+    .map(Number).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.min(800, value));
+  if (!validPattern.length) throw new Error('Motif de vibration invalide.');
+
+  const deviceHaptics = plugin('DeviceHaptics');
+  if (deviceHaptics?.vibrate) {
+    try {
+      await deviceHaptics.vibrate({ pattern: validPattern });
+      return;
+    } catch (error) {
+      console.warn('Vibration Android native impossible, essai du moteur haptique standard', error);
+    }
+  }
+  const haptics = plugin('Haptics');
+  if (haptics?.vibrate) {
+    try {
+      for (let index = 0; index < validPattern.length; index++) {
+        const duration = validPattern[index];
+        if (index % 2) await new Promise(resolve => setTimeout(resolve, duration));
+        else if (duration) await haptics.vibrate({ duration });
+      }
+      return;
+    } catch (error) {
+      console.warn('Vibration Capacitor impossible', error);
+    }
+  }
+  if (window.Capacitor?.getPlatform?.() !== 'android' &&
+      typeof navigator.vibrate === 'function' && navigator.vibrate(validPattern)) return;
+  throw new Error('Vibration indisponible. Vérifie les réglages Android et installe la dernière version de Luna.');
+}
+
 vibe = function (pattern, showNotice = false) {
   if (!$('#vibrate')?.checked) return false;
-  const durations = Array.isArray(pattern) ? pattern : [pattern];
-  const validPattern = durations.map(Number).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.min(800, value));
-  if (!validPattern.length) return false;
-  void (async () => {
-    const deviceHaptics = plugin('DeviceHaptics');
-    if (deviceHaptics?.vibrate) {
-      try {
-        await deviceHaptics.vibrate({ pattern: validPattern });
-        return;
-      } catch (error) {
-        console.warn('Vibration native indisponible, essai du moteur haptique standard', error);
-      }
-    }
-    const haptics = plugin('Haptics');
-    if (haptics?.vibrate) {
-      try {
-        for (let index = 0; index < validPattern.length; index++) {
-          const duration = validPattern[index];
-          if (index % 2) await new Promise(resolve => setTimeout(resolve, duration));
-          else if (duration) await haptics.vibrate({ duration });
-        }
-        return;
-      } catch (error) {
-        console.warn('Vibration Capacitor indisponible, essai du navigateur', error);
-      }
-    }
-    if (typeof navigator.vibrate === 'function' && navigator.vibrate(validPattern)) return;
-    if (showNotice) toast('La vibration est désactivée par Android ou indisponible sur ce téléphone.');
-  })().catch(error => {
+  void performVibration(pattern).catch(error => {
     console.error('Vibration haptique impossible', error);
-    if (showNotice) toast('Impossible de faire vibrer ce téléphone. Vérifie les réglages de vibration Android.');
+    if (showNotice) toast(error.message || 'Impossible de faire vibrer ce téléphone.');
   });
   return true;
+};
+
+$('#vibrationTest').onclick = async () => {
+  if (!$('#vibrate')?.checked) return toast('Active d’abord les vibrations dans les options.');
+  try {
+    await performVibration([100, 60, 180, 80, 300]);
+    toast('Vibration du téléphone déclenchée.');
+  } catch (error) {
+    console.error('Test de vibration impossible', error);
+    toast(error.message || 'Vérifie les réglages de vibration Android.');
+  }
 };
 
 function setReply(message) {
@@ -309,12 +324,15 @@ function setReply(message) {
 
 const originalOutgoing = outgoing;
 outgoing = async function (message) {
+  const messageId = message.id || b64(rnd(9));
+  const outgoingMessage = { ...message, id: messageId };
   const withReply = replyDraft
-    ? { ...message, replyTo: { id: replyDraft.id, text: String(replyDraft.text || 'Pièce jointe').slice(0, 160) } }
-    : message;
-  const result = await originalOutgoing(withReply);
-  if (result !== false && ws?.readyState === WebSocket.OPEN && key && replyDraft) setReply(null);
-  return result;
+    ? { ...outgoingMessage, replyTo: { id: replyDraft.id, text: String(replyDraft.text || 'Pièce jointe').slice(0, 160) } }
+    : outgoingMessage;
+  await originalOutgoing(withReply);
+  const sent = hist.some(item => item.id === messageId && item.f === me);
+  if (sent && ws?.readyState === WebSocket.OPEN && key && replyDraft) setReply(null);
+  return sent;
 };
 
 const originalDraw = draw;
@@ -330,6 +348,13 @@ draw = function () {
       quote.className = 'replyQuote';
       quote.textContent = message.replyTo.text;
       bubble.prepend(quote);
+    }
+    if (!bubble.querySelector('.swipeReplyCue')) {
+      const cue = document.createElement('span');
+      cue.className = 'swipeReplyCue';
+      cue.setAttribute('aria-hidden', 'true');
+      cue.textContent = '↩';
+      bubble.append(cue);
     }
     if (bubble.querySelector('.bubbleActions')) continue;
     const actions = document.createElement('div');
@@ -366,22 +391,78 @@ draw = function () {
 };
 
 let swipeStart = null;
-$('#list').addEventListener('touchstart', event => {
-  const bubble = event.target.closest('.b');
-  if (bubble && event.touches.length === 1) {
-    swipeStart = { bubble, x: event.touches[0].clientX, y: event.touches[0].clientY };
-  }
-}, { passive: true });
-$('#list').addEventListener('touchend', event => {
-  if (!swipeStart || !event.changedTouches.length) return;
-  const dx = event.changedTouches[0].clientX - swipeStart.x;
-  const dy = event.changedTouches[0].clientY - swipeStart.y;
-  if (dx < -65 && Math.abs(dy) < 45) {
-    const index = [...$('#list').querySelectorAll('.b')].indexOf(swipeStart.bubble);
-    if (hist[index]) { setReply(hist[index]); $('#msg').focus(); }
-  }
+const messageList = $('#list');
+function finishReplySwipe(commit) {
+  if (!swipeStart) return;
+  const { bubble, message, dx, dy } = swipeStart;
   swipeStart = null;
-}, { passive: true });
+  const selected = commit && dx < -65 && Math.abs(dy) < 55;
+  const hadSlide = bubble.classList.contains('replySwipeActive');
+  bubble.classList.remove('replySwipeActive');
+  if (hadSlide) bubble.classList.add('replySwipeSettling');
+  bubble.style.transform = '';
+  if (selected) {
+    setReply(message);
+    bubble.classList.add('replyTargetSelected');
+    $('#msg').focus({ preventScroll: true });
+  }
+  if (!hadSlide) {
+    bubble.classList.remove('replySwipeReveal');
+    return;
+  }
+  const clean = () => {
+    bubble.classList.remove('replySwipeSettling', 'replySwipeReveal', 'replyTargetSelected');
+    bubble.style.transition = '';
+    bubble.removeEventListener('transitionend', clean);
+  };
+  bubble.addEventListener('transitionend', clean, { once: true });
+  setTimeout(clean, selected ? 520 : 240);
+}
+
+messageList.addEventListener('pointerdown', event => {
+  const bubble = event.target.closest('.b');
+  if (!bubble || !event.isPrimary || event.button !== 0 ||
+      event.target.closest('button,audio,video,input,textarea')) return;
+  const index = [...messageList.querySelectorAll('.b')].indexOf(bubble);
+  if (!hist[index]) return;
+  swipeStart = {
+    bubble,
+    message: hist[index],
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    dx: 0,
+    dy: 0,
+    active: false
+  };
+  try { bubble.setPointerCapture(event.pointerId); } catch {}
+});
+messageList.addEventListener('pointermove', event => {
+  if (!swipeStart || event.pointerId !== swipeStart.pointerId) return;
+  const dx = event.clientX - swipeStart.x;
+  const dy = event.clientY - swipeStart.y;
+  if (!swipeStart.active && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+    swipeStart = null;
+    return;
+  }
+  if (dx >= 0 || Math.abs(dy) > 55) return;
+  swipeStart.active = true;
+  swipeStart.dx = Math.max(-92, dx);
+  swipeStart.dy = dy;
+  swipeStart.bubble.classList.add('replySwipeActive');
+  swipeStart.bubble.classList.toggle('replySwipeReveal', swipeStart.dx < -45);
+  swipeStart.bubble.style.transform = `translateX(${swipeStart.dx}px)`;
+  if (event.cancelable) event.preventDefault();
+}, { passive: false });
+messageList.addEventListener('pointerup', event => {
+  if (swipeStart?.pointerId === event.pointerId) finishReplySwipe(true);
+});
+messageList.addEventListener('pointercancel', event => {
+  if (swipeStart?.pointerId === event.pointerId) finishReplySwipe(false);
+});
+messageList.addEventListener('lostpointercapture', event => {
+  if (swipeStart?.pointerId === event.pointerId) finishReplySwipe(false);
+});
 
 function saveDate(date) {
   L.coupleDate = date;
@@ -1191,6 +1272,7 @@ $('#mic').onclick = async () => {
       mountVoicePlayer(previewAudio);
       $('#voicePreview').hidden = false;
       $('#mic').setAttribute('aria-label', 'Enregistrer un autre vocal');
+      toast('Vocal prêt : écoute-le, puis touche Envoyer.');
     };
     recorder.start(500);
     $('#mic').classList.add('on');
@@ -1216,21 +1298,37 @@ $('#mic').onclick = async () => {
 function clearVoicePreview() {
   pendingVoiceBlob = null;
   $('#voicePreview').hidden = true;
-  $('#voicePreview audio').removeAttribute('src');
+  const audio = $('#voicePreview audio');
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
   if (voiceObjectUrl) URL.revokeObjectURL(voiceObjectUrl);
   voiceObjectUrl = null;
 }
 $('#voiceCancel').onclick = clearVoicePreview;
+let voiceSending = false;
 $('#voiceSend').onclick = async () => {
-  if (!pendingVoiceBlob) return;
+  if (!pendingVoiceBlob || voiceSending) return;
   const blob = pendingVoiceBlob;
+  const button = $('#voiceSend');
+  voiceSending = true;
+  button.disabled = true;
+  button.textContent = 'Envoi…';
   try {
-    const previousCount = hist.length;
-    await outgoing({ aud: await du(blob), audioMime: blob.type });
-    if (hist.length > previousCount) clearVoicePreview();
+    const sent = await outgoing({ aud: await du(blob), audioMime: blob.type });
+    if (!sent) {
+      toast('Vocal non envoyé : reconnecte l’application au relais puis réessaie.');
+      return;
+    }
+    clearVoicePreview();
+    toast('Message vocal envoyé.');
   } catch (error) {
     console.error('Envoi du message vocal impossible', error);
     toast('Vocal non envoyé. Il reste disponible pour réessayer.');
+  } finally {
+    voiceSending = false;
+    button.disabled = false;
+    button.textContent = 'Envoyer';
   }
 };
 
@@ -1239,6 +1337,12 @@ compactUiStyle.textContent = `
   .menuitem[hidden]{display:none!important}
   #settings [hidden]{display:none!important}
   .distanceLabel{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 6px 2px 0;text-align:left}
+  #list .b{transition:transform 180ms cubic-bezier(.2,.8,.2,1);touch-action:pan-y}
+  #list .b.replySwipeActive{z-index:2;transition:none;box-shadow:0 6px 22px #cf9cff55}
+  .swipeReplyCue{position:absolute;right:-42px;top:50%;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#463457;color:#f2dfff;font-size:19px;opacity:0;transform:translate(-8px,-50%) scale(.75);transition:opacity 140ms,transform 180ms}
+  .replySwipeReveal .swipeReplyCue{opacity:1;transform:translate(0,-50%) scale(1)}
+  .replyTargetSelected{animation:replyTargetPulse 480ms ease-out}
+  @keyframes replyTargetPulse{35%{box-shadow:0 0 0 3px #d6a8ff88}}
   .voicePlayer{display:flex;align-items:center;gap:9px;width:min(310px,100%);min-width:0;padding:9px 10px;border:1px solid #6b587f;border-radius:16px;background:linear-gradient(145deg,#282039,#211a30)}
   .voicePlay{width:36px;height:36px;flex:0 0 36px;border-radius:50%;background:linear-gradient(135deg,#d6a8ff,#ffb2ce);color:#281a34;font-size:15px;font-weight:800}
   .voicePlayer input[type=range]{min-width:35px;flex:1;accent-color:#e2b9ff}
