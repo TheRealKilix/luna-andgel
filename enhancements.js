@@ -300,7 +300,9 @@ $('#vibrationTest').onclick = async () => {
   if (!$('#vibrate')?.checked) return toast('Active d’abord les vibrations dans les options.');
   try {
     await performVibration([100, 60, 180, 80, 300]);
-    toast('Vibration du téléphone déclenchée.');
+    toast(window.Capacitor?.getPlatform?.() === 'android'
+      ? 'Commande envoyée au vibreur Android.'
+      : 'Commande de vibration envoyée.');
   } catch (error) {
     console.error('Test de vibration impossible', error);
     toast(error.message || 'Vérifie les réglages de vibration Android.');
@@ -336,6 +338,37 @@ outgoing = async function (message) {
 };
 
 const originalDraw = draw;
+function closeReactionPickers() {
+  document.querySelectorAll('.reactionPicker').forEach(picker => picker.remove());
+}
+
+function openReactionPicker(bubble, message) {
+  closeReactionPickers();
+  const picker = document.createElement('div');
+  picker.className = 'reactionPicker';
+  picker.setAttribute('role', 'group');
+  picker.setAttribute('aria-label', 'Réagir au message');
+  for (const emoji of ['❤️', '😂', '🥹', '🔥', '👍', '😮']) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.textContent = emoji;
+    option.setAttribute('aria-label', `Réagir avec ${emoji}`);
+    option.onclick = async event => {
+      event.stopPropagation();
+      message.r = message.r || {};
+      message.r[me] = emoji;
+      if (!await send({ k: 'r', id: message.id, e: emoji })) {
+        toast('Réaction non envoyée : reconnecte l’application au relais.');
+        return;
+      }
+      await save();
+      draw();
+    };
+    picker.append(option);
+  }
+  bubble.append(picker);
+}
+
 draw = function () {
   originalDraw();
   const bubbles = $('#list').querySelectorAll('.b');
@@ -349,6 +382,7 @@ draw = function () {
       quote.textContent = message.replyTo.text;
       bubble.prepend(quote);
     }
+    bubble.querySelectorAll('.bubbleActions,.reactionPicker').forEach(element => element.remove());
     if (!bubble.querySelector('.swipeReplyCue')) {
       const cue = document.createElement('span');
       cue.className = 'swipeReplyCue';
@@ -356,37 +390,6 @@ draw = function () {
       cue.textContent = '↩';
       bubble.append(cue);
     }
-    if (bubble.querySelector('.bubbleActions')) continue;
-    const actions = document.createElement('div');
-    actions.className = 'bubbleActions';
-    const react = document.createElement('button');
-    react.type = 'button';
-    react.textContent = '☺';
-    react.setAttribute('aria-label', 'Réagir');
-    react.onclick = event => {
-      event.stopPropagation();
-      let picker = bubble.querySelector('.reactionPicker');
-      if (picker) { picker.remove(); return; }
-      picker = document.createElement('div');
-      picker.className = 'reactionPicker';
-      for (const emoji of ['❤️', '😂', '🥹', '🔥', '👍', '😮']) {
-        const option = document.createElement('button');
-        option.type = 'button';
-        option.textContent = emoji;
-        option.onclick = async choice => {
-          choice.stopPropagation();
-          message.r = message.r || {};
-          message.r[me] = emoji;
-          await send({ k: 'r', id: message.id, e: emoji });
-          await save();
-          draw();
-        };
-        picker.append(option);
-      }
-      actions.append(picker);
-    };
-    actions.append(react);
-    bubble.append(actions);
   }
 
   const rows = [...$('#list').querySelectorAll('.b')];
@@ -410,10 +413,12 @@ draw = function () {
 };
 
 let swipeStart = null;
+let suppressLongPressClick = false;
 const messageList = $('#list');
 function finishReplySwipe(commit) {
   if (!swipeStart) return;
-  const { bubble, message, dx, dy } = swipeStart;
+  const { bubble, message, dx, dy, longPressTimer } = swipeStart;
+  clearTimeout(longPressTimer);
   swipeStart = null;
   const selected = commit && dx < -65 && Math.abs(dy) < 55;
   const hadSlide = bubble.classList.contains('replySwipeActive');
@@ -454,13 +459,21 @@ messageList.addEventListener('pointerdown', event => {
     dy: 0,
     active: false
   };
+  const current = swipeStart;
+  current.longPressTimer = setTimeout(() => {
+    if (swipeStart !== current || current.active) return;
+    current.longPressTriggered = true;
+    openReactionPicker(bubble, current.message);
+  }, 550);
   try { bubble.setPointerCapture(event.pointerId); } catch {}
 });
 messageList.addEventListener('pointermove', event => {
   if (!swipeStart || event.pointerId !== swipeStart.pointerId) return;
   const dx = event.clientX - swipeStart.x;
   const dy = event.clientY - swipeStart.y;
+  if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearTimeout(swipeStart.longPressTimer);
   if (!swipeStart.active && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+    clearTimeout(swipeStart.longPressTimer);
     swipeStart = null;
     return;
   }
@@ -474,7 +487,10 @@ messageList.addEventListener('pointermove', event => {
   if (event.cancelable) event.preventDefault();
 }, { passive: false });
 messageList.addEventListener('pointerup', event => {
-  if (swipeStart?.pointerId === event.pointerId) finishReplySwipe(true);
+  if (swipeStart?.pointerId === event.pointerId) {
+    suppressLongPressClick = Boolean(swipeStart.longPressTriggered);
+    finishReplySwipe(true);
+  }
 });
 messageList.addEventListener('pointercancel', event => {
   if (swipeStart?.pointerId === event.pointerId) finishReplySwipe(false);
@@ -482,6 +498,19 @@ messageList.addEventListener('pointercancel', event => {
 messageList.addEventListener('lostpointercapture', event => {
   if (swipeStart?.pointerId === event.pointerId) finishReplySwipe(false);
 });
+messageList.addEventListener('contextmenu', event => {
+  if (event.target.closest('.b')) event.preventDefault();
+});
+document.addEventListener('click', event => {
+  if (suppressLongPressClick && event.target.closest('.b')) {
+    suppressLongPressClick = false;
+    return;
+  }
+  suppressLongPressClick = false;
+  if (!event.target.closest('.reactionPicker')) closeReactionPickers();
+});
+$('#plus').addEventListener('click', closeReactionPickers);
+$('#settingsBtn').addEventListener('click', closeReactionPickers);
 
 function saveDate(date) {
   L.coupleDate = date;
@@ -1183,6 +1212,8 @@ function mountVoicePlayer(audio) {
     audio.load();
     return;
   }
+  const parent = audio.parentNode;
+  if (!parent) throw new Error('Le lecteur vocal est détaché de la page.');
   const player = document.createElement('div');
   player.className = 'voicePlayer';
   const play = document.createElement('button');
@@ -1208,8 +1239,8 @@ function mountVoicePlayer(audio) {
   audio.removeAttribute('controls');
   audio.preload = 'metadata';
   audio.setAttribute('aria-hidden', 'true');
+  parent.replaceChild(player, audio);
   player.append(play, progress, time, error, audio);
-  audio.replaceWith(player);
 
   const update = () => {
     const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
@@ -1251,6 +1282,18 @@ function mountVoicePlayer(audio) {
   audio.load();
 }
 
+function getVoicePreviewAudio() {
+  const preview = $('#voicePreview');
+  if (!preview) throw new Error('Aperçu vocal absent de cette version de l’application.');
+  let audio = preview.querySelector('audio');
+  if (!audio) {
+    audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    preview.prepend(audio);
+  }
+  return audio;
+}
+
 const originalDrawWithAudio = draw;
 draw = function (...args) {
   originalDrawWithAudio(...args);
@@ -1269,7 +1312,7 @@ function showVoicePreview(blob) {
   pendingVoiceBlob = blob;
   if (voiceObjectUrl) URL.revokeObjectURL(voiceObjectUrl);
   voiceObjectUrl = URL.createObjectURL(blob);
-  const previewAudio = $('#voicePreview audio');
+  const previewAudio = getVoicePreviewAudio();
   previewAudio.src = voiceObjectUrl;
   mountVoicePlayer(previewAudio);
   $('#voicePreview').hidden = false;
@@ -1408,11 +1451,14 @@ $('#mic').onclick = async () => {
 
 function clearVoicePreview() {
   pendingVoiceBlob = null;
-  $('#voicePreview').hidden = true;
+  const preview = $('#voicePreview');
+  if (preview) preview.hidden = true;
   const audio = $('#voicePreview audio');
-  audio.pause();
-  audio.removeAttribute('src');
-  audio.load();
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+  }
   if (voiceObjectUrl) URL.revokeObjectURL(voiceObjectUrl);
   voiceObjectUrl = null;
 }
@@ -1447,7 +1493,8 @@ const compactUiStyle = document.createElement('style');
 compactUiStyle.textContent = `
   .menuitem[hidden]{display:none!important}
   #settings [hidden]{display:none!important}
-  #settings{z-index:100!important;max-height:calc(100dvh - 96px);overflow-y:auto}
+  #settings{z-index:10000!important;max-height:calc(100dvh - 96px);overflow-y:auto}
+  #attachMenu.open{z-index:10000}
   #appVersionInfo{margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#211a30;font-size:12px}
   #appVersionInfo span{display:block;margin-top:4px;color:var(--muted)}
   #appUpdateStatus[data-state="error"]{color:#ffb5c8}
@@ -1466,11 +1513,7 @@ compactUiStyle.textContent = `
   .messageRow.theirs .messageMeta{justify-content:flex-start}
   .messageMeta small{display:block;margin:0;color:#e6d8f5b8;font-size:10px;line-height:1.2;white-space:nowrap}
   .messageMeta .reactions{position:static;transform:none;padding:1px 5px;font-size:12px}
-  .bubbleActions{position:absolute;z-index:5;left:50%;bottom:-16px;transform:translateX(-50%)}
-  .messageRow.theirs .bubbleActions{left:12px;transform:none}
-  .messageRow.mine .bubbleActions{left:auto;right:12px;transform:none}
-  .bubbleActions>button{display:grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid #655273;border-radius:50%;background:#191326;color:#f2dfff;font-size:17px;box-shadow:0 3px 10px #08051088}
-  .reactionPicker{position:absolute;z-index:6;left:50%;bottom:calc(100% + 7px);display:flex;flex-wrap:wrap;gap:3px;max-width:min(280px,calc(100vw - 32px));padding:5px;border:1px solid #554365;border-radius:18px;background:#211a30;box-shadow:0 6px 20px #080510aa;transform:translateX(-50%)}
+  .reactionPicker{position:absolute;z-index:20;left:50%;bottom:calc(100% + 7px);display:flex;flex-wrap:wrap;gap:3px;max-width:min(280px,calc(100vw - 32px));padding:5px;border:1px solid #554365;border-radius:18px;background:#211a30;box-shadow:0 6px 20px #080510aa;transform:translateX(-50%)}
   .messageRow.theirs .reactionPicker{left:0;transform:none}
   .messageRow.mine .reactionPicker{left:auto;right:0;transform:none}
   .reactionPicker button{width:34px;height:34px;padding:0;border-radius:50%;background:#382d4e;font-size:18px}

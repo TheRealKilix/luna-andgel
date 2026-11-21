@@ -37,18 +37,28 @@ public class DeviceHapticsPlugin extends Plugin {
         }
 
         long[] pattern = new long[values.length() + 1];
+        int[] amplitudes = new int[pattern.length];
+        boolean hasPulse = false;
         try {
             for (int i = 0; i < values.length(); i++) {
                 pattern[i + 1] = Math.max(0, Math.min(800, values.getLong(i)));
+                if ((i + 1) % 2 == 1 && pattern[i + 1] > 0) {
+                    amplitudes[i + 1] = 180;
+                    hasPulse = true;
+                }
             }
         } catch (JSONException error) {
             call.reject("Motif de vibration invalide : " + error.getMessage());
             return;
         }
+        if (!hasPulse) {
+            call.reject("Le motif ne contient aucune impulsion de vibration.");
+            return;
+        }
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1));
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, amplitudes, -1));
             } else {
                 vibrator.vibrate(pattern, -1);
             }
