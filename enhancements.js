@@ -1261,7 +1261,7 @@ compactUiStyle.textContent = `
   .connectBoard{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;padding:7px;background:#4b3b66;border-radius:14px}
   .connectCell{aspect-ratio:1;border-radius:50%;background:#211b32;font-size:clamp(14px,5vw,25px);padding:0}
   .connectCell:disabled{opacity:1}
-  .updateOffer{margin-top:10px;padding:12px;border:1px solid #604b77;border-radius:15px;background:#302641;text-align:left}
+  .updateOffer{position:fixed;z-index:90;left:50%;bottom:calc(12px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(440px,calc(100vw - 24px));padding:12px;border:1px solid #604b77;border-radius:15px;background:#302641;text-align:left;box-shadow:0 12px 36px #08051099}
   .updateOffer p{margin:0 0 8px;color:var(--ink);font-size:13px}
   .updateOffer button{width:100%;padding:11px;border-radius:12px;background:linear-gradient(135deg,#c79aee,#e6a9c9);color:#281a34;font-weight:700}
 `;
@@ -1322,10 +1322,12 @@ function renderUpdateOffer(versionName, apkUrl, sha256, ready = false, failed = 
   const panel = document.getElementById('updateOffer') || document.createElement('div');
   panel.id = 'updateOffer';
   panel.className = 'updateOffer';
+  panel.setAttribute('role', 'status');
+  panel.setAttribute('aria-live', 'polite');
   panel.replaceChildren();
   const message = document.createElement('p');
   message.textContent = ready
-    ? `La mise à jour ${versionName} est téléchargée et prête.`
+    ? `La mise à jour ${versionName} est prête. Appuie sur Installer puis confirme dans Android.`
     : failed ? `Téléchargement de ${versionName} interrompu. Réessaie quand tu es en Wi-Fi.`
       : `Nouvelle version ${versionName} : téléchargement en cours…`;
   const install = document.createElement('button');
@@ -1353,8 +1355,7 @@ function renderUpdateOffer(versionName, apkUrl, sha256, ready = false, failed = 
     }
   };
   panel.append(message, install);
-  const lock = $('#lock');
-  if (!panel.isConnected) lock.insertBefore(panel, $('#err'));
+  if (!panel.isConnected) document.body.append(panel);
   panel.hidden = false;
 }
 

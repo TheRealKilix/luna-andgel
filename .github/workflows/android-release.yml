@@ -12,9 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      VERSION_CODE: ${{ github.run_number + 1000 }}
       VERSION_NAME: 1.0.${{ github.run_number }}
-      LUNA_VERSION_CODE: ${{ github.run_number + 1000 }}
       LUNA_GITHUB_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
@@ -54,13 +52,15 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          npm run android:sync
-          cd android
-          ./gradlew assembleRelease "-PVERSION_CODE=$VERSION_CODE" "-PVERSION_NAME=$VERSION_NAME"
-          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/Luna-Andgel.apk"
+            VERSION_CODE=$((GITHUB_RUN_NUMBER + 1000))
+            LUNA_VERSION_CODE="$VERSION_CODE" npm run android:sync
+            cd android
+            ./gradlew assembleRelease "-PVERSION_CODE=$VERSION_CODE" "-PVERSION_NAME=$VERSION_NAME"
+            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/Luna-Andgel.apk"
       - name: Prepare release metadata
         id: metadata
         run: |
+          VERSION_CODE=$((GITHUB_RUN_NUMBER + 1000))
           SHA256="$(sha256sum Luna-Andgel.apk | cut -d ' ' -f 1)"
           TAG="v${VERSION_NAME}-c${VERSION_CODE}"
           printf 'VersionCode: %s\nSHA256: %s\n' "$VERSION_CODE" "$SHA256" > release-notes.txt
