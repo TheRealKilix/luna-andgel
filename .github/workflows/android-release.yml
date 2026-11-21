@@ -1,0 +1,76 @@
+name: Build and publish Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION_CODE: ${{ github.run_number + 1000 }}
+      VERSION_NAME: 1.0.${{ github.run_number }}
+      LUNA_VERSION_CODE: ${{ github.run_number + 1000 }}
+      LUNA_GITHUB_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Prepare stable signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/luna-release.keystore"
+      - name: Install dependencies
+        run: npm ci
+      - name: Add optional Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+          fi
+      - name: Build signed APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/luna-release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          npm run android:sync
+          cd android
+          ./gradlew assembleRelease "-PVERSION_CODE=$VERSION_CODE" "-PVERSION_NAME=$VERSION_NAME"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/Luna-Andgel.apk"
+      - name: Prepare release metadata
+        id: metadata
+        run: |
+          SHA256="$(sha256sum Luna-Andgel.apk | cut -d ' ' -f 1)"
+          TAG="v${VERSION_NAME}-c${VERSION_CODE}"
+          printf 'VersionCode: %s\nSHA256: %s\n' "$VERSION_CODE" "$SHA256" > release-notes.txt
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Publish latest APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.metadata.outputs.tag }}" Luna-Andgel.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Luna & Andgel $VERSION_NAME" \
+            --notes-file release-notes.txt \
+            --latest

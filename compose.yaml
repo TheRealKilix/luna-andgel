@@ -1,0 +1,44 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      DATA_DIR: /app/data
+      TOKEN_ANDGEL: ${TOKEN_ANDGEL:?Set TOKEN_ANDGEL in .env}
+      TOKEN_LUNA: ${TOKEN_LUNA:?Set TOKEN_LUNA in .env}
+    volumes:
+      - relay-data:/app/data
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    depends_on:
+      relay:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,8 @@
+{
+  "appId": "com.lunaandgel.privatechat",
+  "appName": "Luna & Andgel",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}

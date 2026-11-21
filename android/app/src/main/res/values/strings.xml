@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Luna &amp; Andgel</string>
+    <string name="title_activity_main">Luna &amp; Andgel</string>
+    <string name="package_name">com.lunaandgel.privatechat</string>
+    <string name="custom_url_scheme">com.lunaandgel.privatechat</string>
+</resources>

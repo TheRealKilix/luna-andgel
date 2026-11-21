@@ -1,0 +1,287 @@
+.iconbtn,
+#plus,
+#snd,
+#mic {
+  display: grid;
+  place-items: center;
+}
+
+.app-icon {
+  display: block;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+}
+
+.relay-label {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+
+#relayUrl {
+  width: 100%;
+  padding: 14px;
+  border-radius: 15px;
+  border: 1px solid var(--line);
+  background: #181324;
+}
+
+.relay-help {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+#lock .moon {
+  font-size: 0;
+}
+
+#lock .moon .app-icon {
+  width: 54px;
+  height: 54px;
+  margin: auto;
+}
+
+#coupleBar {
+  font-size: 0;
+}
+
+#coupleInfo {
+  font-size: 12px;
+}
+
+#heartOverlay span {
+  font-size: 0;
+}
+
+#heartOverlay span .app-icon {
+  width: 110px;
+  height: 110px;
+}
+
+.menuitem i {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  font-size: 0;
+}
+
+.menuitem i .app-icon {
+  width: 25px;
+  height: 25px;
+}
+
+#mic.on {
+  font-size: 11px;
+}
+
+#peerNote {
+  padding: 8px 14px;
+  color: #e7d7f4;
+  background: #291f38;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.profileBody textarea {
+  width: 100%;
+  padding: 13px;
+  border-radius: 14px;
+  background: #2b233b;
+  border: 1px solid #493856;
+  color: var(--ink);
+  font: inherit;
+}
+
+#replyPreview {
+  position: absolute;
+  z-index: 4;
+  left: 10px;
+  right: 10px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: #302641;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+#replyPreview[hidden] {
+  display: none;
+}
+
+#replyPreview span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#replyPreview button,
+.bubbleActions button,
+.reactionPicker button,
+.sharedRow button,
+.albumHeading button,
+.albumBlock > button {
+  border-radius: 10px;
+  padding: 6px 9px;
+  color: var(--ink);
+  background: #49385d;
+}
+
+.replyQuote {
+  padding: 5px 8px;
+  margin-bottom: 7px;
+  border-left: 3px solid var(--accent);
+  color: #e1c8f4;
+  background: #20192d99;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.bubbleActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.bubbleActions > button {
+  padding: 2px 8px;
+  font-size: 15px;
+}
+
+.reactionPicker {
+  display: flex;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 16px;
+  background: #211a30;
+}
+
+.reactionPicker button {
+  padding: 4px;
+  font-size: 18px;
+}
+
+.sharedList,
+.albumList,
+.gameStage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sharedRow,
+.albumBlock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: #302641;
+}
+
+.sharedRow span {
+  flex: 1 1 55%;
+  overflow-wrap: anywhere;
+}
+
+.sharedRow small {
+  width: 100%;
+  color: var(--muted);
+}
+
+.albumBlock {
+  align-items: stretch;
+}
+
+.albumHeading {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.albumHeading strong {
+  flex: 1;
+}
+
+.albumPhotos {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.albumPhotos img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 9px;
+}
+
+.albumPhoto {
+  position: relative;
+}
+
+.albumPhoto button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #171326d9;
+  color: #fff;
+}
+
+.ticBoard {
+  display: grid;
+  grid-template-columns: repeat(3, 72px);
+  gap: 6px;
+  justify-content: center;
+}
+
+.ticCell {
+  height: 72px;
+  border-radius: 14px;
+  background: #382b4e;
+  color: var(--ink);
+  font-size: 30px;
+}
+
+#voicePreview {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  background: #251e34;
+  border-top: 1px solid var(--line);
+}
+
+#voicePreview[hidden] {
+  display: none;
+}
+
+#voicePreview audio {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+
+#voicePreview button {
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: #49385d;
+}

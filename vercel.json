@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run web:prepare",
+  "outputDirectory": "www",
+  "functions": {
+    "api/ws.js": {
+      "maxDuration": 300
+    }
+  }
+}

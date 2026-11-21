@@ -1,0 +1,8 @@
+node_modules
+android
+www
+.env
+*.apk
+pending-messages.json
+public-keys.json
+scheduled-messages.json

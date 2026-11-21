@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Luna & Andgel",
+  "short_name": "Luna & Andgel",
+  "description": "Un espace privé pour échanger et jouer à deux.",
+  "lang": "fr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#171326",
+  "background_color": "#151222",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
