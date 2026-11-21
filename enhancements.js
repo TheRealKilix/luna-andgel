@@ -6,6 +6,8 @@ const pushCategories = ['message', 'voice', 'affection', 'reaction', 'date', 'ga
 const defaultNotificationPrefs = Object.fromEntries(pushCategories.map(category => [category, true]));
 let replyDraft = null;
 let locationWatch = null;
+let locationWatchType = null;
+let locationPollTimer = null;
 let ownLocation = null;
 let peerLocation = null;
 let peerLocationAt = 0;
@@ -253,22 +255,39 @@ recv = async function (message) {
   }
 };
 
-const originalVibe = vibe;
 vibe = function (pattern, showNotice = false) {
   if (!$('#vibrate')?.checked) return false;
-  const haptics = plugin('Haptics');
-  if (!haptics?.vibrate) return originalVibe(pattern, showNotice);
   const durations = Array.isArray(pattern) ? pattern : [pattern];
+  const validPattern = durations.map(Number).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.min(800, value));
+  if (!validPattern.length) return false;
   void (async () => {
-    for (let index = 0; index < durations.length; index++) {
-      const duration = Number(durations[index]);
-      if (!Number.isFinite(duration) || duration <= 0) continue;
-      if (index % 2) await new Promise(resolve => setTimeout(resolve, Math.min(800, duration)));
-      else await haptics.vibrate({ duration: Math.min(800, duration) });
+    const deviceHaptics = plugin('DeviceHaptics');
+    if (deviceHaptics?.vibrate) {
+      try {
+        await deviceHaptics.vibrate({ pattern: validPattern });
+        return;
+      } catch (error) {
+        console.warn('Vibration native indisponible, essai du moteur haptique standard', error);
+      }
     }
+    const haptics = plugin('Haptics');
+    if (haptics?.vibrate) {
+      try {
+        for (let index = 0; index < validPattern.length; index++) {
+          const duration = validPattern[index];
+          if (index % 2) await new Promise(resolve => setTimeout(resolve, duration));
+          else if (duration) await haptics.vibrate({ duration });
+        }
+        return;
+      } catch (error) {
+        console.warn('Vibration Capacitor indisponible, essai du navigateur', error);
+      }
+    }
+    if (typeof navigator.vibrate === 'function' && navigator.vibrate(validPattern)) return;
+    if (showNotice) toast('La vibration est désactivée par Android ou indisponible sur ce téléphone.');
   })().catch(error => {
     console.error('Vibration haptique impossible', error);
-    originalVibe(pattern, showNotice);
+    if (showNotice) toast('Impossible de faire vibrer ce téléphone. Vérifie les réglages de vibration Android.');
   });
   return true;
 };
@@ -845,34 +864,89 @@ function updateDistanceLabel() {
 
 async function startLocationSharing() {
   const geolocation = plugin('Geolocation');
+  const deviceLocation = plugin('DeviceLocation');
   try {
-    let position;
-    if (geolocation?.requestPermissions) {
-      const permission = await geolocation.requestPermissions();
-      if (permission.location === 'denied' || permission.coarseLocation === 'denied') throw new Error('Permission de localisation refusée.');
-      position = await geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
-    } else if (navigator.geolocation) {
-      position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }));
-    } else throw new Error('Géolocalisation indisponible sur cet appareil.');
+    let position = null;
+    if (deviceLocation?.getCurrentPosition) {
+      try {
+        position = await deviceLocation.getCurrentPosition();
+      } catch (error) {
+        if (/permission|denied/i.test(String(error?.message || ''))) throw error;
+        console.warn('Localisation Android directe indisponible, essai du plugin Capacitor', error);
+      }
+    }
+    if (!position && geolocation?.requestPermissions && geolocation?.getCurrentPosition) {
+      try {
+        const permission = await geolocation.requestPermissions();
+        if (permission.location === 'denied' || permission.coarseLocation === 'denied') {
+          throw new Error('Permission de localisation refusée dans les réglages Android.');
+        }
+        position = await geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+      } catch (error) {
+        if (/permission|denied/i.test(String(error?.message || ''))) throw error;
+        console.warn('Plugin de géolocalisation Capacitor indisponible, essai du navigateur', error);
+      }
+    }
+    if (!position && navigator.geolocation) {
+      position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+        resolve,
+        reject,
+        { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+      ));
+      locationWatchType = 'browser';
+    }
+    if (!position?.coords || !Number.isFinite(position.coords.latitude) || !Number.isFinite(position.coords.longitude)) {
+      throw new Error('Position indisponible. Active la localisation Android et réessaie.');
+    }
     ownLocation = { lat: Math.round(position.coords.latitude * 1000) / 1000, lon: Math.round(position.coords.longitude * 1000) / 1000 };
     updateDistanceLabel();
     const publish = () => send({ k: 'location', sharing: true, ...ownLocation, updatedAt: Date.now() });
     await publish();
-    if (locationWatch !== null && geolocation?.clearWatch) await geolocation.clearWatch({ id: locationWatch });
+    if (locationWatch !== null) {
+      if (locationWatchType === 'native' && geolocation?.clearWatch) await geolocation.clearWatch({ id: locationWatch });
+      else if (locationWatchType === 'browser') navigator.geolocation?.clearWatch(locationWatch);
+    }
     locationWatch = null;
+    locationWatchType = null;
+    const updateOwnPosition = async result => {
+      if (!result?.coords || !Number.isFinite(result.coords.latitude) || !Number.isFinite(result.coords.longitude)) return;
+      const next = { lat: Math.round(result.coords.latitude * 1000) / 1000, lon: Math.round(result.coords.longitude * 1000) / 1000 };
+      if (!ownLocation || Math.abs(next.lat - ownLocation.lat) + Math.abs(next.lon - ownLocation.lon) > 0.002) {
+        ownLocation = next;
+        updateDistanceLabel();
+        await publish();
+      }
+    };
     if (geolocation?.watchPosition) {
-      locationWatch = await geolocation.watchPosition({ enableHighAccuracy: false, timeout: 30000, maximumAge: 60000 }, async result => {
-        if (!result) return;
-        const next = { lat: Math.round(result.coords.latitude * 1000) / 1000, lon: Math.round(result.coords.longitude * 1000) / 1000 };
-        if (!ownLocation || Math.abs(next.lat - ownLocation.lat) + Math.abs(next.lon - ownLocation.lon) > 0.002) {
-          ownLocation = next; updateDistanceLabel(); await publish();
-        }
-      });
-    } else if (navigator.geolocation) {
+      try {
+        locationWatch = await geolocation.watchPosition(
+          { enableHighAccuracy: false, timeout: 30000, maximumAge: 60000 },
+          result => { void updateOwnPosition(result); }
+        );
+        locationWatchType = 'native';
+      } catch (error) {
+        console.warn('Suivi natif de position indisponible, essai du navigateur', error);
+      }
+    }
+    if (locationWatch === null && navigator.geolocation) {
       locationWatch = navigator.geolocation.watchPosition(async result => {
-        const next = { lat: Math.round(result.coords.latitude * 1000) / 1000, lon: Math.round(result.coords.longitude * 1000) / 1000 };
-        if (!ownLocation || Math.abs(next.lat - ownLocation.lat) + Math.abs(next.lon - ownLocation.lon) > 0.002) { ownLocation = next; updateDistanceLabel(); await publish(); }
-      }, error => console.error('Mise à jour de la position impossible', error), { enableHighAccuracy: false, maximumAge: 60000 });
+        await updateOwnPosition(result);
+      }, error => {
+        console.error('Mise à jour de la position impossible', error);
+        toast('La position ne se met plus à jour. Vérifie les réglages de localisation.');
+      }, { enableHighAccuracy: false, maximumAge: 60000, timeout: 30000 });
+      locationWatchType = 'browser';
+    }
+    if (locationPollTimer !== null) clearInterval(locationPollTimer);
+    if (deviceLocation?.getCurrentPosition) {
+      locationPollTimer = setInterval(async () => {
+        if (!ownLocation || document.hidden) return;
+        try {
+          await updateOwnPosition(await deviceLocation.getCurrentPosition());
+        } catch (error) {
+          console.warn('Actualisation périodique de la position impossible', error);
+        }
+      }, 180000);
     }
     renderFeature();
   } catch (error) {
@@ -883,10 +957,12 @@ async function startLocationSharing() {
 async function stopLocationSharing() {
   const geolocation = plugin('Geolocation');
   if (locationWatch !== null) {
-    if (geolocation?.clearWatch) await geolocation.clearWatch({ id: locationWatch });
-    else navigator.geolocation?.clearWatch(locationWatch);
+    if (locationWatchType === 'native' && geolocation?.clearWatch) await geolocation.clearWatch({ id: locationWatch });
+    else if (locationWatchType === 'browser') navigator.geolocation?.clearWatch(locationWatch);
   }
-  locationWatch = null; ownLocation = null;
+  if (locationPollTimer !== null) clearInterval(locationPollTimer);
+  locationPollTimer = null;
+  locationWatch = null; locationWatchType = null; ownLocation = null;
   updateDistanceLabel();
   await send({ k: 'location', sharing: false, updatedAt: Date.now() });
   renderFeature();
@@ -981,6 +1057,92 @@ $('#featureContent').addEventListener('change', prefChangeHandler, true);
 let pendingVoiceBlob = null;
 let voiceObjectUrl = null;
 let voiceDurationTimer = null;
+
+function audioTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+function mountVoicePlayer(audio) {
+  if (audio.closest('.voicePlayer')) {
+    audio.load();
+    return;
+  }
+  const player = document.createElement('div');
+  player.className = 'voicePlayer';
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'voicePlay';
+  play.textContent = '▶';
+  play.setAttribute('aria-label', 'Lire le message vocal');
+  const progress = document.createElement('input');
+  progress.type = 'range';
+  progress.min = '0';
+  progress.max = '1000';
+  progress.value = '0';
+  progress.setAttribute('aria-label', 'Position du message vocal');
+  const time = document.createElement('span');
+  time.className = 'voiceTime';
+  time.textContent = '0:00 / 0:00';
+  const error = document.createElement('span');
+  error.className = 'voiceError';
+  error.hidden = true;
+  error.textContent = 'Lecture impossible';
+
+  audio.className = 'voiceAudio';
+  audio.removeAttribute('controls');
+  audio.preload = 'metadata';
+  audio.setAttribute('aria-hidden', 'true');
+  player.append(play, progress, time, error, audio);
+  audio.replaceWith(player);
+
+  const update = () => {
+    const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+    time.textContent = `${audioTime(audio.currentTime)} / ${audioTime(duration)}`;
+    progress.value = String(duration ? Math.round((audio.currentTime / duration) * 1000) : 0);
+    play.textContent = audio.paused ? '▶' : 'Ⅱ';
+    play.setAttribute('aria-label', audio.paused ? 'Lire le message vocal' : 'Mettre le message vocal en pause');
+  };
+  play.addEventListener('click', async event => {
+    event.stopPropagation();
+    if (audio.paused) {
+      document.querySelectorAll('.voiceAudio').forEach(otherAudio => {
+        if (otherAudio !== audio) otherAudio.pause();
+      });
+      try {
+        await audio.play();
+      } catch (playError) {
+        console.error('Lecture du vocal impossible', playError);
+        error.hidden = false;
+        error.textContent = 'Format audio non pris en charge';
+      }
+    } else audio.pause();
+    update();
+  });
+  progress.addEventListener('input', event => {
+    event.stopPropagation();
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      audio.currentTime = (Number(progress.value) / 1000) * audio.duration;
+    }
+  });
+  progress.addEventListener('click', event => event.stopPropagation());
+  for (const eventName of ['loadedmetadata', 'durationchange', 'timeupdate', 'play', 'pause', 'ended']) {
+    audio.addEventListener(eventName, update);
+  }
+  audio.addEventListener('error', () => {
+    error.hidden = false;
+    error.textContent = 'Format audio non pris en charge';
+  });
+  audio.load();
+}
+
+const originalDrawWithAudio = draw;
+draw = function (...args) {
+  originalDrawWithAudio(...args);
+  document.querySelectorAll('#list .b audio').forEach(mountVoicePlayer);
+};
+
 $('#mic').onclick = async () => {
   if (rec) { rec.stop(); return; }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
@@ -999,7 +1161,7 @@ $('#mic').onclick = async () => {
     } });
     const chunks = [];
     const options = { audioBitsPerSecond: 32000 };
-    for (const mime of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+    for (const mime of ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']) {
       if (MediaRecorder.isTypeSupported?.(mime)) { options.mimeType = mime; break; }
     }
     let recorder;
@@ -1024,7 +1186,9 @@ $('#mic').onclick = async () => {
       }
       if (voiceObjectUrl) URL.revokeObjectURL(voiceObjectUrl);
       voiceObjectUrl = URL.createObjectURL(pendingVoiceBlob);
-      $('#voicePreview audio').src = voiceObjectUrl;
+      const previewAudio = $('#voicePreview audio');
+      previewAudio.src = voiceObjectUrl;
+      mountVoicePlayer(previewAudio);
       $('#voicePreview').hidden = false;
       $('#mic').setAttribute('aria-label', 'Enregistrer un autre vocal');
     };
@@ -1075,6 +1239,13 @@ compactUiStyle.textContent = `
   .menuitem[hidden]{display:none!important}
   #settings [hidden]{display:none!important}
   .distanceLabel{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 6px 2px 0;text-align:left}
+  .voicePlayer{display:flex;align-items:center;gap:9px;width:min(310px,100%);min-width:0;padding:9px 10px;border:1px solid #6b587f;border-radius:16px;background:linear-gradient(145deg,#282039,#211a30)}
+  .voicePlay{width:36px;height:36px;flex:0 0 36px;border-radius:50%;background:linear-gradient(135deg,#d6a8ff,#ffb2ce);color:#281a34;font-size:15px;font-weight:800}
+  .voicePlayer input[type=range]{min-width:35px;flex:1;accent-color:#e2b9ff}
+  .voiceTime{flex:0 0 auto;color:#e8dcef;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .voiceAudio{display:none!important}
+  .voiceError{color:#ffc1d1;font-size:11px}
+  #voicePreview .voicePlayer{flex:1}
   .taskComposer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
   .taskComposer input{min-width:0}
   .taskComposer .featureAction{width:auto;padding:10px 15px}
