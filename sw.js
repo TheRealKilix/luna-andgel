@@ -1,7 +1,7 @@
 'use strict';
 
-const CACHE = 'luna-andgel-shell-v3';
-const SHELL = ['/', '/manifest.webmanifest', '/app-icon.svg', '/app-icons.css', '/update-config.js', '/enhancements.js'];
+const CACHE = 'luna-andgel-shell-v4';
+const SHELL = ['/', '/manifest.webmanifest', '/app-icon.svg', '/app-icons.css', '/enhancements.js'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));

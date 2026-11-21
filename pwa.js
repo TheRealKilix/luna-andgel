@@ -108,7 +108,18 @@ new MutationObserver(() => {
   }
 }).observe(micButton, { childList: true });
 
-if ('serviceWorker' in navigator && window.isSecureContext) {
+const nativeAndroid = window.Capacitor?.getPlatform?.() === 'android';
+
+if (nativeAndroid && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker.getRegistrations()
+    .then(async registrations => {
+      await Promise.all(registrations.map(registration => registration.unregister()));
+      if ('caches' in window) {
+        await Promise.all((await caches.keys()).map(cacheName => caches.delete(cacheName)));
+      }
+    })
+    .catch(error => console.error('Nettoyage du cache Android impossible :', error));
+} else if ('serviceWorker' in navigator && window.isSecureContext) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(error => {
       console.error('Impossible d’activer le mode hors ligne :', error);
