@@ -28,9 +28,10 @@ for (const file of ['manifest.webmanifest', 'app-icon.svg', 'app-icons.css', 'pw
 
 const repository = process.env.LUNA_GITHUB_REPO || process.env.GITHUB_REPOSITORY || '';
 const versionCode = Number(process.env.LUNA_VERSION_CODE || process.env.VERSION_CODE || 1);
+const versionName = process.env.LUNA_VERSION_NAME || process.env.VERSION_NAME || '1.0.0';
 fs.writeFileSync(
   path.join(webDir, 'update-config.js'),
-  `window.LUNA_UPDATE_CONFIG = Object.freeze(${JSON.stringify({ repository, versionCode })});\n`
+  `window.LUNA_UPDATE_CONFIG = Object.freeze(${JSON.stringify({ repository, versionCode, versionName })});\n`
 );
 
 const androidDir = path.join(root, 'android');

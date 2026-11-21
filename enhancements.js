@@ -1127,6 +1127,17 @@ notificationButton.className = 'setbtn'; notificationButton.textContent = 'Notif
 notificationButton.onclick = () => openFeatureWithState('notifications');
 oldSettings.append(notificationButton);
 
+const appVersionInfo = document.createElement('div');
+appVersionInfo.id = 'appVersionInfo';
+appVersionInfo.innerHTML = '<strong id="appVersionLabel">Version installée</strong><span id="appUpdateStatus" role="status" aria-live="polite">Vérification automatique au démarrage.</span>';
+const checkAppUpdateButton = document.createElement('button');
+checkAppUpdateButton.id = 'checkAppUpdate';
+checkAppUpdateButton.className = 'setbtn';
+checkAppUpdateButton.type = 'button';
+checkAppUpdateButton.textContent = 'Vérifier et récupérer la mise à jour';
+checkAppUpdateButton.onclick = () => { void checkForAppUpdate({ manual: true }); };
+oldSettings.append(appVersionInfo, checkAppUpdateButton);
+
 const prefChangeHandler = event => {
   const category = event.target.dataset.notification;
   if (!pushCategories.includes(category)) return;
@@ -1336,6 +1347,11 @@ const compactUiStyle = document.createElement('style');
 compactUiStyle.textContent = `
   .menuitem[hidden]{display:none!important}
   #settings [hidden]{display:none!important}
+  #settings{max-height:calc(100dvh - 96px);overflow-y:auto}
+  #appVersionInfo{margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#211a30;font-size:12px}
+  #appVersionInfo span{display:block;margin-top:4px;color:var(--muted)}
+  #appUpdateStatus[data-state="error"]{color:#ffb5c8}
+  #appUpdateStatus[data-state="ready"]{color:#c8f2d4}
   .distanceLabel{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 6px 2px 0;text-align:left}
   #list .b{transition:transform 180ms cubic-bezier(.2,.8,.2,1);touch-action:pan-y}
   #list .b.replySwipeActive{z-index:2;transition:none;box-shadow:0 6px 22px #cf9cff55}
@@ -1423,6 +1439,9 @@ for (const eventName of ['pointerup', 'pointercancel', 'pointerleave']) {
 }
 
 function renderUpdateOffer(versionName, apkUrl, sha256, ready = false, failed = false) {
+  if (ready) setAppUpdateStatus(`${versionName} téléchargée. Confirme son installation dans Android.`, 'ready');
+  else if (failed) setAppUpdateStatus(`Téléchargement de ${versionName} interrompu.`, 'error');
+  else setAppUpdateStatus(`Nouvelle version ${versionName} détectée, téléchargement en cours.`);
   const panel = document.getElementById('updateOffer') || document.createElement('div');
   panel.id = 'updateOffer';
   panel.className = 'updateOffer';
@@ -1445,7 +1464,12 @@ function renderUpdateOffer(versionName, apkUrl, sha256, ready = false, failed = 
     try {
       if (ready) {
         const result = await updater.installDownloadedApk();
-        if (result?.permissionRequired) toast('Autorise l’installation depuis cette source, puis reviens ici et réessaie.');
+        if (result?.permissionRequired) {
+          setAppUpdateStatus('Autorise les installations depuis Luna dans Android, puis reviens ici.', 'error');
+          toast('Autorise l’installation depuis cette source, puis reviens ici et réessaie.');
+        } else {
+          setAppUpdateStatus('Installateur Android ouvert : confirme pour terminer.');
+        }
       } else {
         await updater.downloadApk({ url: apkUrl, sha256 });
         renderUpdateOffer(versionName, apkUrl, sha256, true);
@@ -1463,10 +1487,34 @@ function renderUpdateOffer(versionName, apkUrl, sha256, ready = false, failed = 
   panel.hidden = false;
 }
 
-async function checkForAppUpdate() {
+function setAppUpdateStatus(message, state = 'info') {
+  const status = document.getElementById('appUpdateStatus');
+  if (!status) return;
+  status.textContent = message;
+  status.dataset.state = state;
+}
+
+let appUpdateCheckRunning = false;
+async function checkForAppUpdate({ manual = false } = {}) {
   const config = window.LUNA_UPDATE_CONFIG || {};
   const repository = String(config.repository || '');
-  if (window.Capacitor?.getPlatform?.() !== 'android' || !/^[\w.-]+\/[\w.-]+$/.test(repository)) return;
+  const installedVersionCode = Number(config.versionCode) || 1;
+  const installedVersionName = String(config.versionName || 'Inconnue');
+  const versionLabel = document.getElementById('appVersionLabel');
+  if (versionLabel) versionLabel.textContent = `Version installée : ${installedVersionName} (build ${installedVersionCode})`;
+  if (appUpdateCheckRunning) return;
+  if (window.Capacitor?.getPlatform?.() !== 'android') {
+    setAppUpdateStatus('Les mises à jour APK sont disponibles uniquement dans l’application Android.');
+    return;
+  }
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) {
+    setAppUpdateStatus('Vérification indisponible : configuration de mise à jour absente.', 'error');
+    return;
+  }
+  appUpdateCheckRunning = true;
+  checkAppUpdateButton.disabled = true;
+  checkAppUpdateButton.textContent = 'Vérification en cours…';
+  setAppUpdateStatus('Recherche de la dernière version…');
   try {
     const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
       headers: { Accept: 'application/vnd.github+json' },
@@ -1474,10 +1522,17 @@ async function checkForAppUpdate() {
     });
     if (!response.ok) throw new Error(`GitHub API a répondu ${response.status}`);
     const release = await response.json();
-    if (release.draft || release.prerelease) return;
+    if (release.draft || release.prerelease) {
+      setAppUpdateStatus('Aucune version stable disponible pour le moment.');
+      return;
+    }
     const body = String(release.body || '');
     const versionCode = Number(body.match(/VersionCode:\s*(\d+)/i)?.[1] || release.tag_name?.match(/(\d+)$/)?.[1]);
-    if (!Number.isSafeInteger(versionCode) || versionCode <= Number(config.versionCode || 1)) return;
+    if (!Number.isSafeInteger(versionCode)) throw new Error('Numéro de version absent de la publication.');
+    if (versionCode <= installedVersionCode) {
+      setAppUpdateStatus('L’application est à jour.');
+      return;
+    }
     const sha256 = body.match(/SHA256:\s*([a-f\d]{64})/i)?.[1]?.toLowerCase();
     const apk = release.assets?.find(asset => asset.name === 'Luna-Andgel.apk');
     if (!sha256 || !apk?.browser_download_url) throw new Error('Métadonnées de mise à jour manquantes.');
@@ -1497,6 +1552,12 @@ async function checkForAppUpdate() {
     }
   } catch (error) {
     console.error('Vérification des mises à jour impossible', error);
+    setAppUpdateStatus('Vérification impossible. Vérifie ta connexion et réessaie.', 'error');
+    if (manual) toast(error.message || 'Impossible de vérifier les mises à jour.');
+  } finally {
+    appUpdateCheckRunning = false;
+    checkAppUpdateButton.disabled = false;
+    checkAppUpdateButton.textContent = 'Vérifier et récupérer la mise à jour';
   }
 }
 window.addEventListener('load', () => { void checkForAppUpdate(); }, { once: true });
